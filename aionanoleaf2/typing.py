@@ -80,10 +80,35 @@ class EffectsData(TypedDict):
 
     select: str
     effectsList: list[str]
-    
+
+
+class EffectPaletteColor(TypedDict):
+    """Nanoleaf API effect palette color."""
+
+    hue: int
+    saturation: int
+    brightness: int
+    probability: float
+
+
+class EffectDetailsRequired(TypedDict):
+    """Required Nanoleaf API effect details."""
+
+    animName: str
+    animType: str
+
+
+class EffectDetailsData(EffectDetailsRequired, total=False):
+    """Nanoleaf API effect details."""
+
+    palette: list[EffectPaletteColor]
+    hexPalette: list[str]
+
+
 class EmersionData(TypedDict):
     """Nanoleaf API Emersion data."""
     screenMirrorMode: int
+
 
 class InfoData(TypedDict):
     """Nanoleaf API info."""
@@ -130,6 +155,7 @@ class EffectsEventData(TypedDict):
 
     attr: int
     value: str
+
 
 class TouchEventData(TypedDict):
     """Nanoleaf API Touch event data."""
