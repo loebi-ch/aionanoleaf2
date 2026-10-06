@@ -117,6 +117,7 @@ class Nanoleaf:
         self._emersion_list = []
         self._emersion = ""
         self._panels = set()
+        self._supports_events: bool | None = None
 
 
 
@@ -251,6 +252,11 @@ class Nanoleaf:
         return self._panels
 
     @property
+    def supports_events(self) -> bool | None:
+        """Return whether the device supports event streaming."""
+        return self._supports_events
+
+    @property
     def _api_url(self) -> str:
         return f"http://{self.host}:{self.port}/api/v1"
 
@@ -347,6 +353,9 @@ class Nanoleaf:
         if self._model in EMERSION_MODELS:
             await self.get_emersion()
 
+        # Infer event support from the presence of panelLayout.
+        # Note: Devices without panelLayout (e.g. Essentials) do not expose the event endpoint.
+        self._supports_events = "panelLayout" in data
 
 
 # Fetch the list of available effects for Nanoleaf Essentials.
