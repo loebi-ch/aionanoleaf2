@@ -291,22 +291,33 @@ class Nanoleaf:
         self._hardware_version = data.get("hardwareVersion")
         self._model = data["model"]
         
-        # Populate state (light status)
-        state = data["state"]
-        self._is_on = state["on"]["value"]
-        self._brightness = state["brightness"]["value"]
-        self._brightness_max = state["brightness"]["max"]
-        self._brightness_min = state["brightness"]["min"]
-        self._hue = state["hue"]["value"]
-        self._hue_max = state["hue"]["max"]
-        self._hue_min = state["hue"]["min"]
-        self._saturation = state["sat"]["value"]
-        self._saturation_max = state["sat"]["max"]
-        self._saturation_min = state["sat"]["min"]
-        self._color_temperature = state["ct"]["value"]
-        self._color_temperature_max = state["ct"]["max"]
-        self._color_temperature_min = state["ct"]["min"]
-        self._color_mode = state["colorMode"]
+        # Nanoleaf Essentials are missing the state object in the main payload, so we have to fetch it separately.
+        state = data.get("state")
+        if state is None:
+            try:
+                resp = await self._request("get", "state")
+                state = await resp.json()
+            except Unavailable:
+                state = {}
+
+        self._is_on = state.get("on", {}).get("value", False)
+        brightness = state.get("brightness", {})
+        self._brightness = brightness.get("value", self._brightness)
+        self._brightness_max = brightness.get("max", self._brightness_max)
+        self._brightness_min = brightness.get("min", self._brightness_min)
+        hue = state.get("hue", {})
+        self._hue = hue.get("value", self._hue)
+        self._hue_max = hue.get("max", self._hue_max)
+        self._hue_min = hue.get("min", self._hue_min)
+        sat = state.get("sat", {})
+        self._saturation = sat.get("value", self._saturation)
+        self._saturation_max = sat.get("max", self._saturation_max)
+        self._saturation_min = sat.get("min", self._saturation_min)
+        ct = state.get("ct", {})
+        self._color_temperature = ct.get("value", self._color_temperature)
+        self._color_temperature_max = ct.get("max", self._color_temperature_max)
+        self._color_temperature_min = ct.get("min", self._color_temperature_min)
+        self._color_mode = state.get("colorMode", self._color_mode)
 
         # Nanoleaf Essentials are missing the effectsList in the main payload, so we have to fetch it separately.
         effects = data.get("effects", {})
@@ -337,7 +348,10 @@ class Nanoleaf:
     async def get_effects(self) -> list[str]:
         try:
             resp = await self._request("get", "effects/effectsList")
-            return await resp.json()
+            data = await resp.json()
+            if isinstance(data, dict):
+                return data.get("effectsList") or []
+            return data or []
         except Unavailable:
             return []
 
@@ -347,7 +361,10 @@ class Nanoleaf:
     async def get_selected_effect(self) -> str | None:
         try:
             resp = await self._request("get", "effects/select")
-            return await resp.json()
+            data = await resp.json()
+            if isinstance(data, dict):
+                return data.get("select") or None
+            return data
         except Unavailable:
             return None
 

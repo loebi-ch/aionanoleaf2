@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as f:
 
 setup(
     name="aionanoleaf2",
-    version="1.0.2",
+    version="1.0.3",
     author="loebi-ch",
     author_email="andy@slyweb.ch",
     description="Async Python package for the Nanoleaf API that replaces aioNanoleaf.",
