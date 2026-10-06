@@ -28,7 +28,7 @@ import ipaddress
 
 from .layout import Panel
 from typing import Any, Callable
-from .typing import InfoData, EmersionData
+from .typing import InfoData, EmersionData, EffectDetailsData
 
 from aiohttp import (
     ClientConnectorError,
@@ -113,6 +113,7 @@ class Nanoleaf:
         self._color_mode = ""
         self._effects_list = []
         self._effect = ""
+        self._effect_details = {}
         self._emersion_list = []
         self._emersion = ""
         self._panels = set()
@@ -224,6 +225,10 @@ class Nanoleaf:
     @property
     def effect(self) -> str:
         return self._effect
+
+    @property
+    def effect_details(self) -> EffectDetailsData:
+        return self._effect_details
 
     @property
     def selected_effect(self) -> str | None:
@@ -354,6 +359,26 @@ class Nanoleaf:
             return data or []
         except Unavailable:
             return []
+
+
+
+# Fetch the current details of a specific effect.
+    async def get_effect_details(self, effect: str) -> EffectDetailsData | None:
+        try:
+            resp = await self._request(
+                "put",
+                "effects",
+                {
+                    "write": {
+                        "command": "request",
+                        "animName": effect,
+                    },
+                },
+            )
+            self._effect_details = await resp.json()
+            return self._effect_details
+        except Unavailable:
+            return None
 
 
 
