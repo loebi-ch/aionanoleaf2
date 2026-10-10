@@ -527,6 +527,9 @@ class Nanoleaf:
             # If transition is requested, dim to 0 first
             await self.set_brightness(0, transition=transition)
 
+        # Small delay to handle read-after-write consistency on Nanoleaf firmware 5.x.x
+        await asyncio.sleep(0.3)
+
 
 
 # Flash the panels of the Nanoleaf device for identification.
