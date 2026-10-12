@@ -69,7 +69,7 @@ class StateEvent(Event):
             4: "saturation",
             5: "color_temperature",
             6: "color_mode",
-        }[self.attribute_id]
+        }.get(self.attribute_id, f"unknown_{self.attribute_id}")
 
     @property
     def value(self) -> str | int:
@@ -97,7 +97,7 @@ class LayoutEvent(Event):
         return {
             1: "layout",
             2: "global_orientation",
-        }[self.attribute_id]
+        }.get(self.attribute_id, f"unknown_{self.attribute_id}")
 
 
 class EffectsEvent(Event):
@@ -198,6 +198,6 @@ class TouchStreamEvent:
     @property
     def panel_id_2(self) -> int | None:
         """Return second panel ID."""
-        if self._panel_id_2 == 2 ^ 16:
+        if self._panel_id_2 in (0xFFFF, 65535, 65536):
             return None
         return self._panel_id_2

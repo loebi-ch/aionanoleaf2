@@ -110,7 +110,7 @@ class EmersionData(TypedDict):
     screenMirrorMode: int
 
 
-class InfoData(TypedDict):
+class InfoData(TypedDict, total=False):
     """Nanoleaf API info."""
 
     name: str
