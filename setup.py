@@ -26,7 +26,7 @@ with open("README.md", "r", encoding="utf-8") as f:
 
 setup(
     name="aionanoleaf2",
-    version="1.1.0",
+    version="1.2.0",
     author="loebi-ch",
     author_email="andy@slyweb.ch",
     description="Async Python package for the Nanoleaf API that replaces aioNanoleaf.",
@@ -50,7 +50,7 @@ setup(
         "Topic :: Home Automation",
         "Typing :: Typed",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.12",
     packages=["aionanoleaf2"],
     package_data={"aionanoleaf2": ["py.typed"]},
     install_requires=["aiohttp"],

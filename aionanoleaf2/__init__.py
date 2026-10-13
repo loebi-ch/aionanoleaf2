@@ -20,45 +20,48 @@
 # along with aionanoleaf2.  If not, see <https://www.gnu.org/licenses/>.
 
 
-from .nanoleaf import Nanoleaf
-
-from .events import (
-    StateEvent,
-    LayoutEvent,
-    EffectsEvent,
-    TouchEvent,
-    TouchStreamEvent
-)
-
+from .events import EffectsEvent, LayoutEvent, StateEvent, TouchEvent, TouchStreamEvent
 from .exceptions import (
-    NanoleafException,
+    AuthError,
+    EndpointNotFoundError,
     InvalidEffect,
     InvalidEmersion,
+    InvalidResponseError,
     InvalidToken,
+    NanoleafConnectionError,
+    NanoleafError,
+    NanoleafException,
+    NanoleafTimeoutError,
     NoAuthToken,
     Unauthorized,
     Unavailable,
 )
-
 from .layout import (
-    Shape,
     Panel,
+    Shape,
 )
+from .nanoleaf import Nanoleaf
 
 __all__ = [
-    "Nanoleaf",
-    "StateEvent",
-    "LayoutEvent",
+    "AuthError",
     "EffectsEvent",
-    "TouchEvent",
-    "TouchStreamEvent",
-    "NanoleafException",
+    "EndpointNotFoundError",
     "InvalidEffect",
     "InvalidEmersion",
+    "InvalidResponseError",
     "InvalidToken",
+    "LayoutEvent",
+    "Nanoleaf",
+    "NanoleafConnectionError",
+    "NanoleafError",
+    "NanoleafException",
+    "NanoleafTimeoutError",
     "NoAuthToken",
+    "Panel",
+    "Shape",
+    "StateEvent",
+    "TouchEvent",
+    "TouchStreamEvent",
     "Unauthorized",
     "Unavailable",
-    "Shape",
-    "Panel",
 ]

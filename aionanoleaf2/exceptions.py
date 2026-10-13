@@ -19,25 +19,102 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with aionanoleaf2.  If not, see <https://www.gnu.org/licenses/>.
 
-"""Nanoleaf exceptions."""
+"""Nanoleaf exceptions.
 
-class NanoleafException(Exception):
-    """General Nanoleaf exception."""
+Hierarchy::
 
-class InvalidEffect(NanoleafException, ValueError):
-    """Invalid effect specified."""
+    NanoleafError                      (alias: NanoleafException)
+    ├── AuthError                      -> reauth
+    │   └── InvalidToken
+    ├── Unauthorized                   -> pairing mode not active (NOT reauth)
+    ├── NoAuthToken                    -> client misuse
+    ├── Unavailable                    -> device unreachable / unusable
+    │   ├── NanoleafConnectionError
+    │   └── NanoleafTimeoutError
+    ├── InvalidResponseError           -> unexpected payload / content type
+    ├── EndpointNotFoundError          -> HTTP 404, optional endpoint missing
+    ├── InvalidEffect (ValueError)
+    └── InvalidEmersion (ValueError)
+"""
 
-class InvalidEmersion(NanoleafException, ValueError):
-    """Invalid emersion specified."""
+from __future__ import annotations
 
-class InvalidToken(NanoleafException):
-    """Invalid token specified."""
+__all__ = [
+    "AuthError",
+    "EndpointNotFoundError",
+    "InvalidEffect",
+    "InvalidEmersion",
+    "InvalidResponseError",
+    "InvalidToken",
+    "NanoleafConnectionError",
+    "NanoleafError",
+    "NanoleafException",
+    "NanoleafTimeoutError",
+    "NoAuthToken",
+    "Unauthorized",
+    "Unavailable",
+]
 
-class NoAuthToken(NanoleafException):
+
+class NanoleafError(Exception):
+    """Root of all aionanoleaf2 exceptions."""
+
+
+# Backwards-compatible alias (<= 1.1.0). Deprecated, to be removed in 2.0.0.
+NanoleafException = NanoleafError
+
+
+class AuthError(NanoleafError):
+    """The device rejected our credentials."""
+
+
+class InvalidToken(AuthError):
+    """Invalid token specified (HTTP 401)."""
+
+
+class Unauthorized(NanoleafError):
+    """The device is not accepting new tokens (pairing mode inactive).
+
+    Deliberately NOT an AuthError: this is a user-action-required condition
+    during setup and must never trigger a reauth flow.
+    """
+
+
+class NoAuthToken(NanoleafError):
     """No auth_token specified."""
 
-class Unauthorized(NanoleafException):
-    """Not authorizing new tokens."""
 
-class Unavailable(NanoleafException):
-    """Device is unavailable."""
+class Unavailable(NanoleafError):
+    """Device is unavailable (transport failure or unusable HTTP status)."""
+
+
+class NanoleafConnectionError(Unavailable):
+    """Connection to the device could not be established or was lost."""
+
+
+class NanoleafTimeoutError(Unavailable):
+    """The device did not answer within the configured timeout."""
+
+
+class InvalidResponseError(NanoleafError):
+    """The device answered, but not with a usable JSON payload."""
+
+
+class EndpointNotFoundError(NanoleafError):
+    """The device answered HTTP 404 for an endpoint.
+
+    Intentionally not an Unavailable: the device is reachable, the endpoint
+    just does not exist on this model/firmware (e.g. Essentials).
+    """
+
+    def __init__(self, path: str, message: str | None = None) -> None:
+        super().__init__(message or f"Endpoint not found: '{path}'")
+        self.path: str = path
+
+
+class InvalidEffect(NanoleafError, ValueError):
+    """Invalid effect specified."""
+
+
+class InvalidEmersion(NanoleafError, ValueError):
+    """Invalid emersion specified."""

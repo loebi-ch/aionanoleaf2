@@ -20,6 +20,7 @@
 # along with aionanoleaf2.  If not, see <https://www.gnu.org/licenses/>.
 
 """Nanoleaf events."""
+
 from __future__ import annotations
 
 from abc import ABC

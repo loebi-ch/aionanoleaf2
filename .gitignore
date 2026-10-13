@@ -1,4 +1,17 @@
-dist/**
-build/**
-*.egg-info/**
-**/__pycache__
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+
+# Caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Environments
+.venv/
+env/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/

@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import asyncio
+
 from aiohttp import ClientSession
 
 import aionanoleaf2
@@ -55,10 +56,19 @@ async def test() -> None:
 
         print("\n=== CURRENT STATE ===")
         print("On:", nanoleaf.is_on)
-        print("Brightness:", f"{nanoleaf.brightness} [{nanoleaf.brightness_min} - {nanoleaf.brightness_max}]")
+        print(
+            "Brightness:",
+            f"{nanoleaf.brightness} [{nanoleaf.brightness_min} - {nanoleaf.brightness_max}]",
+        )
         print("Hue:", f"{nanoleaf.hue} [{nanoleaf.hue_min} - {nanoleaf.hue_max}]")
-        print("Saturation:", f"{nanoleaf.saturation} [{nanoleaf.saturation_min} - {nanoleaf.saturation_max}]")
-        print("Color temperature:", f"{nanoleaf.color_temperature} [{nanoleaf.color_temperature_min} - {nanoleaf.color_temperature_max}]")
+        print(
+            "Saturation:",
+            f"{nanoleaf.saturation} [{nanoleaf.saturation_min} - {nanoleaf.saturation_max}]",
+        )
+        print(
+            "Color temperature:",
+            f"{nanoleaf.color_temperature} [{nanoleaf.color_temperature_min} - {nanoleaf.color_temperature_max}]",
+        )
         print("Color mode:", nanoleaf.color_mode)
         print("Selected effect:", nanoleaf.selected_effect)
 
@@ -93,7 +103,7 @@ async def test() -> None:
             try:
                 await asyncio.wait_for(event_received.wait(), timeout=5.0)
                 print("SSE stream test passed successfully.")
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 print("SSE event timed out (controller did not push state within 5s).")
             finally:
                 # Saubere Task-Stornierung prüfen

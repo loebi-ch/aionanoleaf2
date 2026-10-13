@@ -20,6 +20,7 @@
 # along with aionanoleaf2.  If not, see <https://www.gnu.org/licenses/>.
 
 """Nanoleaf API types."""
+
 from __future__ import annotations
 
 from typing import TypedDict
@@ -102,6 +103,7 @@ class EffectDetailsData(TypedDict, total=False):
 
 class EmersionData(TypedDict):
     """Nanoleaf API Emersion data."""
+
     screenMirrorMode: int
 
 
