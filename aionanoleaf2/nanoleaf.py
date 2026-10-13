@@ -22,8 +22,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import ipaddress
 import json
+import logging
+import random
 import socket
 import struct
 from collections.abc import Callable, Mapping
@@ -35,6 +38,7 @@ from urllib.parse import quote, unquote
 from aiohttp import (
     ClientConnectionError,
     ClientError,
+    ClientPayloadError,
     ClientResponse,
     ClientSession,
     ClientTimeout,
@@ -61,7 +65,15 @@ from .exceptions import (
     Unavailable,
 )
 from .layout import Panel
-from .typing import EffectDetailsData, EmersionData, InfoData
+from .typing import (
+    EffectDetailsData,
+    EffectsEventData,
+    EmersionData,
+    InfoData,
+    LayoutEventData,
+    StateEventData,
+    TouchEventData,
+)
 
 # Models that support Screen Mirroring (e.g. Nanoleaf 4D)
 EMERSION_MODELS = ["NL69"]
@@ -79,6 +91,53 @@ type JSONValue = (
 
 # RFC 6874: the zone separator '%' is percent-encoded as '%25' inside URLs
 _ZONE_SEPARATOR_URL: Final = "%25"
+
+_LOGGER: Final = logging.getLogger(__name__)
+
+# SSE reconnect policy (seconds).
+_SSE_CONNECT_TIMEOUT: Final = 5.0
+_SSE_BACKOFF_INITIAL: Final = 1.0
+_SSE_BACKOFF_MAX: Final = 30.0
+_SSE_BACKOFF_FACTOR: Final = 2.0
+# A connection that stayed up this long counts as healthy, even if it was idle.
+_SSE_STABLE_AFTER: Final = 60.0
+
+# Keys every event of a given SSE event type must carry; others are dropped.
+_SSE_REQUIRED_KEYS: Final[Mapping[int, tuple[str, ...]]] = {
+    StateEvent.EVENT_TYPE_ID: ("attr", "value"),
+    LayoutEvent.EVENT_TYPE_ID: ("attr",),
+    EffectsEvent.EVENT_TYPE_ID: ("attr", "value"),
+    TouchEvent.EVENT_TYPE_ID: ("gesture", "panelId"),
+}
+
+
+def _backoff_delay(attempt: int) -> float:
+    """Return the reconnect delay for the given attempt (0-based).
+
+    Exponential growth from ``_SSE_BACKOFF_INITIAL`` up to ``_SSE_BACKOFF_MAX``
+    with jitter: the result lies in [ceiling / 2, ceiling] so that several
+    clients do not reconnect in lockstep after a controller restart.
+    """
+    ceiling = min(
+        _SSE_BACKOFF_MAX,
+        _SSE_BACKOFF_INITIAL * _SSE_BACKOFF_FACTOR ** min(attempt, 16),
+    )
+    return ceiling / 2 + random.uniform(0.0, ceiling / 2)
+
+
+class _Backoff:
+    """Attempt counter for the SSE reconnect delay."""
+
+    def __init__(self) -> None:
+        self._attempt = 0
+
+    def reset(self) -> None:
+        self._attempt = 0
+
+    def next_delay(self) -> float:
+        delay = _backoff_delay(self._attempt)
+        self._attempt += 1
+        return delay
 
 
 def _as_object(value: JSONValue, path: str) -> dict[str, Any]:
@@ -167,6 +226,11 @@ class Nanoleaf:
 
         # None signals that capability has not yet been fetched via get_info()
         self._supports_events: bool | None = None
+
+        # Strong references to running async callback tasks (prevents GC)
+        self._background_tasks: set[asyncio.Future[Any]] = set()
+        # Local UDP endpoint for the touch stream, closed when listening ends
+        self._touch_transport: asyncio.BaseTransport | None = None
 
     # --- PROPERTIES (GETTERS) ---
 
@@ -610,23 +674,39 @@ class Nanoleaf:
         local_ip: str | None = None,
         local_port: int | None = None,
     ) -> None:
-        """Start listening for Server-Sent Events (SSE) and optional UDP touch stream."""
+        """Listen for Server-Sent Events (SSE) and the optional UDP touch stream.
+
+        Runs until cancelled. Callbacks may be plain functions or coroutine
+        functions; an exception inside a callback is logged and never stops the
+        listener. Transient network errors are retried with exponential backoff.
+
+        Raises:
+            NoAuthToken: no auth token configured (nothing is opened or sent).
+            InvalidToken: the device rejected the token (HTTP 401). Reconnecting
+                cannot succeed; the caller should start a re-authentication.
+            EndpointNotFoundError: the device has no event stream (HTTP 404).
+        """
+        # Fail fast before a UDP socket is opened.
+        _ = self.auth_token
+
+        self._close_touch_transport()
         socket_port: int | None = None
+        try:
+            # Open local UDP socket first if high-frequency touch streaming is requested
+            if touch_stream_callback is not None:
+                socket_port = await self._open_udp_socket_for_touch_data_stream(
+                    touch_stream_callback, local_ip, local_port
+                )
 
-        # Open local UDP socket first if high-frequency touch streaming is requested
-        if touch_stream_callback is not None:
-            socket_port = await self._open_udp_socket_for_touch_data_stream(
-                touch_stream_callback, local_ip, local_port
+            await self._listen_for_server_sent_events(
+                state_callback,
+                layout_callback,
+                effects_callback,
+                touch_callback,
+                socket_port,
             )
-
-        # Start persistent SSE listener loop
-        await self._listen_for_server_sent_events(
-            state_callback,
-            layout_callback,
-            effects_callback,
-            touch_callback,
-            socket_port,
-        )
+        finally:
+            self._close_touch_transport()
 
     # --- PRIVATE HELPER METHODS ---
 
@@ -744,7 +824,7 @@ class Nanoleaf:
 
     async def _open_udp_socket_for_touch_data_stream(
         self,
-        callback: Callable,
+        callback: Callable[[TouchStreamEvent], Any],
         local_ip: str | None = None,
         local_port: int | None = None,
     ) -> int:
@@ -759,12 +839,20 @@ class Nanoleaf:
             lambda: _NanoleafTouchProtocol(self._raw_host, callback),
             local_addr=(local_ip, local_port),
         )
+        self._touch_transport = transport
         touch_socket: socket.socket = transport.get_extra_info("socket")
-        socket_port = touch_socket.getsockname()[1]
+        socket_port: int | None = touch_socket.getsockname()[1]
 
         if socket_port is None:
+            self._close_touch_transport()
             raise NanoleafError("Could not determine port of socket")
         return socket_port
+
+    def _close_touch_transport(self) -> None:
+        """Close the local UDP touch endpoint, if one is open."""
+        transport, self._touch_transport = self._touch_transport, None
+        if transport is not None:
+            transport.close()
 
     async def _listen_for_server_sent_events(
         self,
@@ -774,8 +862,14 @@ class Nanoleaf:
         touch_callback: Callable[[TouchEvent], Any] | None = None,
         socket_port: int | None = None,
     ) -> None:
-        """Consume Server-Sent Events (SSE) stream with automatic reconnect logic."""
-        # Assemble URL query parameters specifying subscribed event classes
+        """Consume the SSE stream with automatic reconnect.
+
+        Terminal conditions are raised: ``InvalidToken`` (HTTP 401),
+        ``EndpointNotFoundError`` (HTTP 404) and cancellation. Everything else
+        (connection errors, timeouts, other HTTP errors, end of stream) is
+        retried with exponential backoff and jitter.
+        """
+        # Never log this URL: it contains the auth token.
         request_url = (
             f"{self._api_url}/{self.auth_token}/events?"
             f"id={StateEvent.EVENT_TYPE_ID},{EffectsEvent.EVENT_TYPE_ID}"
@@ -791,97 +885,201 @@ class Nanoleaf:
         if socket_port is not None:
             request_headers = {"TouchEventsPort": str(socket_port)}
 
-        # Infinite read timeout for long-polling streaming; strict 5s connection timeout
-        request_timeout = ClientTimeout(total=None, sock_connect=5, sock_read=None)
+        # Persistent stream: no total/read timeout, strict connect timeout.
+        request_timeout = ClientTimeout(
+            total=None, sock_connect=_SSE_CONNECT_TIMEOUT, sock_read=None
+        )
 
+        callbacks: dict[int, Callable[[Any], Any] | None] = {
+            StateEvent.EVENT_TYPE_ID: state_callback,
+            LayoutEvent.EVENT_TYPE_ID: layout_callback,
+            EffectsEvent.EVENT_TYPE_ID: effects_callback,
+            TouchEvent.EVENT_TYPE_ID: touch_callback,
+        }
+        backoff = _Backoff()
+        loop = asyncio.get_running_loop()
+
+        try:
+            while True:
+                connected_at: float | None = None
+                try:
+                    async with self._session.get(
+                        request_url, headers=request_headers, timeout=request_timeout
+                    ) as resp:
+                        if resp.status == HTTPStatus.UNAUTHORIZED:
+                            raise InvalidToken("Event stream rejected the auth token.")
+                        if resp.status == HTTPStatus.NOT_FOUND:
+                            raise EndpointNotFoundError("events")
+                        if resp.status == HTTPStatus.OK:
+                            connected_at = loop.time()
+                            await self._read_sse_stream(resp, callbacks, backoff)
+                            _LOGGER.debug(
+                                "Event stream of %s closed by device", self._host
+                            )
+                        else:
+                            _LOGGER.warning(
+                                "Event stream of %s returned HTTP %s",
+                                self._host,
+                                resp.status,
+                            )
+                except (ClientError, TimeoutError) as err:
+                    _LOGGER.debug(
+                        "Event stream of %s failed (%s: %s)",
+                        self._host,
+                        type(err).__name__,
+                        err,
+                    )
+
+                # A long-lived connection is healthy even when no event arrived.
+                if (
+                    connected_at is not None
+                    and loop.time() - connected_at >= _SSE_STABLE_AFTER
+                ):
+                    backoff.reset()
+                await asyncio.sleep(backoff.next_delay())
+        except asyncio.CancelledError:
+            # The response is already closed by 'async with'; stop pending callbacks.
+            await self._cancel_background_tasks()
+            raise
+
+    async def _read_sse_stream(
+        self,
+        resp: ClientResponse,
+        callbacks: Mapping[int, Callable[[Any], Any] | None],
+        backoff: _Backoff,
+    ) -> None:
+        """Read one SSE response until EOF.
+
+        Each event is a pair of lines ``id: <type>`` and ``data: <json>``.
+        Blank lines, comments and unknown fields are ignored; undecodable lines
+        and malformed events are skipped so one bad chunk cannot end the stream.
+        """
+        event_type_id: int | None = None
         while True:
             try:
-                async with self._session.get(
-                    request_url, headers=request_headers, timeout=request_timeout
-                ) as resp:
-                    if resp.status != 200:
-                        # Non-OK response -> wait and retry connection
-                        await asyncio.sleep(5)
-                        continue
+                raw = await resp.content.readline()
+            except ValueError as err:
+                # aiohttp raises ValueError for lines beyond its buffer limit
+                raise ClientPayloadError("SSE line exceeds buffer limit") from err
+            if not raw:
+                return  # EOF -> caller reconnects
 
-                    while True:
-                        line_bytes = await resp.content.readline()
-                        if not line_bytes:
-                            # Stream terminated by server (EOF) -> reconnect
-                            break
+            try:
+                line = raw.decode("utf-8").strip()
+            except UnicodeDecodeError:
+                _LOGGER.debug("Skipping undecodable SSE line from %s", self._host)
+                event_type_id = None
+                continue
 
-                        line = line_bytes.decode("utf-8").strip()
-                        if not line:
-                            # Skip SSE protocol keep-alive empty lines
-                            continue
+            if not line or line.startswith(":"):
+                continue
 
-                        # Parse SSE event type header line 'id: <event_type_id>'
-                        if line.startswith("id:"):
-                            try:
-                                event_type_id = int(line.split(":", 1)[1].strip())
-                            except ValueError:
-                                continue
+            field, _, value = line.partition(":")
+            value = value.strip()
+            if field == "id":
+                try:
+                    event_type_id = int(value)
+                except ValueError:
+                    event_type_id = None
+            elif field == "data" and event_type_id is not None:
+                type_id, event_type_id = event_type_id, None
+                if await self._process_sse_data(type_id, value, callbacks):
+                    backoff.reset()
 
-                            # Consume subsequent payload line 'data: <json>'
-                            data_bytes = await resp.content.readline()
-                            data_line = data_bytes.decode("utf-8").strip()
+    async def _process_sse_data(
+        self,
+        type_id: int,
+        payload: str,
+        callbacks: Mapping[int, Callable[[Any], Any] | None],
+    ) -> bool:
+        """Dispatch the events of one ``data:`` payload; return True if any succeeded."""
+        required = _SSE_REQUIRED_KEYS.get(type_id)
+        if required is None:
+            _LOGGER.debug("Ignoring SSE event type %s", type_id)
+            return False
 
-                            if not data_line.startswith("data:"):
-                                continue
+        try:
+            data = json.loads(payload)
+        except (ValueError, RecursionError):
+            _LOGGER.debug("Skipping SSE payload that is not valid JSON")
+            return False
+        events = data.get("events") if isinstance(data, dict) else None
+        if not isinstance(events, list):
+            _LOGGER.debug("Skipping SSE payload without an 'events' list")
+            return False
 
-                            try:
-                                json_str = data_line.split(":", 1)[1].strip()
-                                data = json.loads(json_str)
-                            except (IndexError, json.JSONDecodeError):
-                                continue
+        handled = False
+        for event_data in events:
+            if not isinstance(event_data, dict) or not all(
+                key in event_data for key in required
+            ):
+                _LOGGER.debug("Skipping malformed SSE event of type %s", type_id)
+                continue
+            try:
+                await self._dispatch_event(type_id, event_data, callbacks)
+            except Exception:  # a bad event must not end the stream
+                _LOGGER.exception("Failed to process SSE event of type %s", type_id)
+            else:
+                handled = True
+        return handled
 
-                            # Dispatch each event within the payload array
-                            for event_data in data.get("events", []):
-                                if event_type_id == StateEvent.EVENT_TYPE_ID:
-                                    event = StateEvent(event_data)
-                                    # Maintain local instance state synchronization
-                                    if hasattr(self, f"_{event.attribute}"):
-                                        setattr(
-                                            self, f"_{event.attribute}", event.value
-                                        )
-                                    if state_callback:
-                                        asyncio.create_task(state_callback(event))
+    async def _dispatch_event(
+        self,
+        type_id: int,
+        event_data: dict[str, Any],
+        callbacks: Mapping[int, Callable[[Any], Any] | None],
+    ) -> None:
+        """Update local state for one validated event and notify its callback."""
+        event: StateEvent | LayoutEvent | EffectsEvent | TouchEvent
+        if type_id == StateEvent.EVENT_TYPE_ID:
+            event = StateEvent(cast(StateEventData, event_data))
+            # Maintain local instance state synchronization
+            if hasattr(self, f"_{event.attribute}"):
+                setattr(self, f"_{event.attribute}", event.value)
+        elif type_id == LayoutEvent.EVENT_TYPE_ID:
+            event = LayoutEvent(cast(LayoutEventData, event_data))
+        elif type_id == EffectsEvent.EVENT_TYPE_ID:
+            event = EffectsEvent(cast(EffectsEventData, event_data))
+            self._effect = event.effect
+            # When 4D Screen Mirroring is triggered, update active mode
+            if event.effect == "*Emersion*":
+                try:
+                    await self.get_emersion()
+                except NanoleafError as err:
+                    _LOGGER.debug("Could not refresh screen mirror mode: %s", err)
+        else:
+            event = TouchEvent(cast(TouchEventData, event_data))
+        self._invoke_callback(callbacks.get(type_id), event)
 
-                                elif event_type_id == LayoutEvent.EVENT_TYPE_ID:
-                                    layout_event = LayoutEvent(event_data)
-                                    if layout_callback:
-                                        asyncio.create_task(
-                                            layout_callback(layout_event)
-                                        )
+    def _invoke_callback[E](
+        self, callback: Callable[[E], Any] | None, event: E
+    ) -> None:
+        """Run a sync callback or schedule an async one; never raises."""
+        if callback is None:
+            return
+        try:
+            result = callback(event)
+        except Exception:  # consumer code must not end the stream
+            _LOGGER.exception("Event callback %r raised", callback)
+            return
+        if inspect.isawaitable(result):
+            task = asyncio.ensure_future(result)
+            self._background_tasks.add(task)
+            task.add_done_callback(self._on_callback_task_done)
 
-                                elif event_type_id == EffectsEvent.EVENT_TYPE_ID:
-                                    effects_event = EffectsEvent(event_data)
-                                    self._effect = effects_event.effect
+    def _on_callback_task_done(self, task: asyncio.Future[Any]) -> None:
+        """Release the task reference and surface a failed callback."""
+        self._background_tasks.discard(task)
+        if not task.cancelled() and (exc := task.exception()) is not None:
+            _LOGGER.error("Async event callback failed", exc_info=exc)
 
-                                    # When 4D Screen Mirroring is triggered, update active mode
-                                    if effects_event.effect == "*Emersion*":
-                                        try:
-                                            await self.get_emersion()
-                                        except Unavailable:
-                                            # Catch failures to prevent aborting the entire SSE loop
-                                            pass
-                                    if effects_callback:
-                                        asyncio.create_task(
-                                            effects_callback(effects_event)
-                                        )
-
-                                elif event_type_id == TouchEvent.EVENT_TYPE_ID:
-                                    touch_event = TouchEvent(event_data)
-                                    if touch_callback:
-                                        asyncio.create_task(touch_callback(touch_event))
-
-            except asyncio.CancelledError:
-                # Re-raise cancellation immediately to ensure clean task shutdown without reconnecting
-                raise
-
-            except (TimeoutError, ClientError):
-                # Connection dropped -> backoff and attempt reconnect
-                await asyncio.sleep(5)
+    async def _cancel_background_tasks(self) -> None:
+        """Cancel running callback tasks and wait until they have finished."""
+        tasks = [task for task in self._background_tasks if not task.done()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 class _NanoleafTouchProtocol(asyncio.DatagramProtocol):
