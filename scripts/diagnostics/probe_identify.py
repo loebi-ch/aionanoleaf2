@@ -6,8 +6,8 @@ Nur Standardbibliothek. Das Gerät blinkt bei Erfolg kurz; es wird sonst nichts
 verändert. Mit --pair wird ein temporäres Token angelegt und am Ende gelöscht.
 
 Aufruf:
-  python scripts/probe_identify.py 192.168.1.57 --pair
-  python scripts/probe_identify.py 192.168.1.57 --token TOKEN
+  python scripts/diagnostics/probe_identify.py 192.168.1.57 --pair
+  python scripts/diagnostics/probe_identify.py 192.168.1.57 --token TOKEN
 """
 
 from __future__ import annotations

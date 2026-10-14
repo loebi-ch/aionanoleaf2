@@ -36,7 +36,8 @@ async def main() -> None:
     async with ClientSession() as session:
         nanoleaf = Nanoleaf(session, "192.168.1.28")
         try:
-            # Hold the power button for 5-7 seconds first, then call within 30 s
+            # Enable API access in the Nanoleaf app, or hold the power button
+            # for 5-7 seconds, then call within 30 s
             await nanoleaf.authorize()
         except Unauthorized:
             print("The device is not in pairing mode.")
@@ -78,7 +79,7 @@ Nanoleaf(session, host, auth_token=None, port=16021, retries=3)
 | `port` | API port, default `16021`. |
 | `retries` | Attempts per request on timeouts and connection errors. |
 
-Requests use a 5 second total and 3 second connect timeout. HTTP 401 and 404 are never retried.
+Requests use a 5 second total and 3 second connect timeout. Only timeouts and connection errors are retried; HTTP error responses never are.
 
 ## Reading and controlling the device
 
@@ -106,7 +107,7 @@ await nanoleaf.set_hue(120)
 await nanoleaf.set_saturation(70)
 await nanoleaf.set_color_temperature(4000)
 await nanoleaf.set_effect("Northern Lights")  # raises InvalidEffect if unknown
-await nanoleaf.identify()  # flash the panels
+await nanoleaf.identify()  # flash the panels (not available on Essentials)
 ```
 
 `set_state(...)` changes several attributes in a single request. Relative changes are not idempotent, so a retried request after a timeout could apply them twice.
@@ -189,6 +190,8 @@ NanoleafError
 | `InvalidResponseError`, `EndpointNotFoundError` | Unexpected firmware behavior. |
 | `InvalidEffect`, `InvalidEmersion` | Invalid user input. |
 
+For HTTP errors, the `Unavailable` message contains the status code, the path and (truncated) the response text of the device.
+
 ### Mapping to Home Assistant
 
 | aionanoleaf2 | Home Assistant |
@@ -198,6 +201,15 @@ NanoleafError
 | `InvalidEffect` (service call) | `ServiceValidationError` |
 | `AuthError` (service call) | re-authentication and `HomeAssistantError` |
 | other `NanoleafError` (service call) | `HomeAssistantError` |
+
+## Known device behavior
+
+These are quirks of the devices, not of the library. They were observed on a few real devices (NL52 and NL42 with firmware 12.3.2 and 12.4.1, NL72K1 with 4.0.11, NL69 with 12.4.1) and may differ on other models or firmware versions.
+
+- **Essentials (NL72K1, firmware 4.0.11):** The local API has no working `identify` endpoint: the device answers with HTTP 400 and does not react, which the library raises as `Unavailable`. Nanoleaf's documentation for the Essentials API does not list an identify command either, although the Nanoleaf app can identify the device. The device has no event stream (`supports_events` is `False`). A `turn_off()` sent immediately after `set_effect()` was ignored by the device; waiting about half a second in between avoids it.
+- **Value rounding:** The firmware may report slightly different values than you set, for example 4331 K as 4347 K.
+- **Elements (NL52, firmware 12.3.2):** `set_brightness()` on a switched-off device turned it on.
+- **Sporadic HTTP 400:** In a few smoke-test runs, the first write to a switched-off NL52 or NL69 was answered with HTTP 400. On the NL69 the device was switched on afterwards. It could not be reproduced in 24 controlled on/off cycles. The library raises `Unavailable`; its message contains the device's response text.
 
 ## Migrating from 1.1.0 / `aionanoleaf`
 
@@ -213,10 +225,10 @@ The `scripts/` folder (not part of the PyPI package) contains checks to run agai
 
 | Script | Purpose |
 | --- | --- |
-| `scripts/probe_endpoints.py` | Read-only probe of the HTTP status of every endpoint (standard library only). |
 | `scripts/smoke_get_info.py` | Read-only `get_info()` check. |
-| `scripts/smoke_listen_events.py` | Starts the listener, changes the brightness briefly and checks the event, clean cancel, and (NL69) the Screen Mirroring mode. Restores the previous values. |
 | `scripts/smoke_control.py` | Exercises the write path (power, brightness, color, effects, identify), reads each result back and restores the previous state. |
+| `scripts/smoke_listen_events.py` | Starts the listener, changes the brightness briefly and checks the event, clean cancel, and (NL69) the Screen Mirroring mode. Restores the previous values. |
+| `scripts/diagnostics/` | One-off probes that document device quirks: `probe_endpoints.py` (HTTP status of every endpoint, read-only), `probe_identify.py` and `probe_turn_off.py` (Essentials). Not needed for normal use. |
 
 ```bash
 python scripts/smoke_get_info.py 192.168.1.56 --token TOKEN

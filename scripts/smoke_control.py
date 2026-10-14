@@ -285,7 +285,7 @@ async def restore(light: Nanoleaf, snap: Snapshot, res: Result) -> None:
         await light.set_brightness(snap.brightness)
         if not snap.is_on:
             # Der Essentials ignoriert turn_off(), wenn es unmittelbar auf set_effect()
-            # folgt (siehe probe_turn_off.py): kurz warten.
+            # folgt (siehe diagnostics/probe_turn_off.py): kurz warten.
             await asyncio.sleep(SETTLE_SECONDS)
             await light.turn_off()
         await refresh(light)

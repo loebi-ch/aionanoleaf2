@@ -4,9 +4,9 @@
 Nur Standardbibliothek, keine Abhängigkeit von aionanoleaf2 oder aiohttp, kein Retry.
 
 Aufruf:
-  python probe_endpoints.py HOST --token TOKEN
-  python probe_endpoints.py HOST --pair            # holt zuerst ein neues Token (Pairing-Modus nötig)
-  python probe_endpoints.py HOST --pair --cleanup  # ... und löscht dieses Token am Ende wieder
+  python scripts/diagnostics/probe_endpoints.py HOST --token TOKEN
+  python scripts/diagnostics/probe_endpoints.py HOST --pair            # holt zuerst ein neues Token (Pairing-Modus nötig)
+  python scripts/diagnostics/probe_endpoints.py HOST --pair --cleanup  # ... und löscht dieses Token am Ende wieder
 """
 
 from __future__ import annotations

@@ -9,8 +9,8 @@ Zustand, damit sich die Ursache eingrenzen lässt (Reihenfolge, Zeitabstand, Eff
 Es wird nur Strom, Helligkeit und Effekt verändert und am Ende wiederhergestellt.
 
 Aufruf (im Projektordner, venv aktiv):
-  python scripts/probe_turn_off.py 192.168.1.57 --pair
-  python scripts/probe_turn_off.py 192.168.1.57 --token TOKEN
+  python scripts/diagnostics/probe_turn_off.py 192.168.1.57 --pair
+  python scripts/diagnostics/probe_turn_off.py 192.168.1.57 --token TOKEN
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 # Lokale Library (Repo-Root) vor einer evtl. installierten Version verwenden.
-_ROOT = Path(__file__).resolve().parent.parent
+_ROOT = Path(__file__).resolve().parent.parent.parent
 if (_ROOT / "aionanoleaf2").is_dir():
     sys.path.insert(0, str(_ROOT))
 
