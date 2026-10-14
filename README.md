@@ -216,11 +216,12 @@ The `scripts/` folder (not part of the PyPI package) contains checks to run agai
 | `scripts/probe_endpoints.py` | Read-only probe of the HTTP status of every endpoint (standard library only). |
 | `scripts/smoke_get_info.py` | Read-only `get_info()` check. |
 | `scripts/smoke_listen_events.py` | Starts the listener, changes the brightness briefly and checks the event, clean cancel, and (NL69) the Screen Mirroring mode. Restores the previous values. |
-| `scripts/manual_smoke_test.py` | Manual end-to-end walkthrough. |
+| `scripts/smoke_control.py` | Exercises the write path (power, brightness, color, effects, identify), reads each result back and restores the previous state. |
 
 ```bash
 python scripts/smoke_get_info.py 192.168.1.56 --token TOKEN
 python scripts/smoke_listen_events.py 192.168.1.56 --pair
+python scripts/smoke_control.py 192.168.1.56 --token TOKEN
 ```
 
 ## Development
