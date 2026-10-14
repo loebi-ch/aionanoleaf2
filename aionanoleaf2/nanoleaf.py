@@ -84,6 +84,9 @@ EMERSION_MODES = {6: "1D", 2: "2D", 3: "3D", 5: "4D"}
 # Pre-computed inverted mapping for O(1) dictionary lookups in set_emersion()
 EMERSION_MODES_INVERTED = {v: k for k, v in EMERSION_MODES.items()}
 
+# Maximum number of characters of a device error body added to exception messages.
+_MAX_ERROR_DETAIL: Final = 200
+
 # Decoded JSON document as returned by the Nanoleaf API
 type JSONValue = (
     dict[str, JSONValue] | list[JSONValue] | str | int | float | bool | None
@@ -747,8 +750,9 @@ class Nanoleaf:
                     if status == HTTPStatus.NOT_FOUND:
                         raise EndpointNotFoundError(path)
                     if status >= HTTPStatus.BAD_REQUEST:
+                        detail = await self._error_detail(resp)
                         raise Unavailable(
-                            f"Device returned HTTP {status} for '{path or '/'}'"
+                            f"Device returned HTTP {status} for '{path or '/'}'{detail}"
                         )
                     return await self._decode_body(resp, path)
             except TimeoutError as err:  # also ServerTimeoutError
@@ -768,6 +772,24 @@ class Nanoleaf:
         raise NanoleafConnectionError(
             f"Could not reach {self._host} after {attempts} attempt(s)"
         ) from last_error
+
+    @staticmethod
+    async def _error_detail(resp: ClientResponse) -> str:
+        """Return the device's error text as ': <text>' (empty if there is none).
+
+        Best effort for diagnostics only: a failure to read the body must never
+        replace the HTTP error that is being reported.
+        """
+        try:
+            text = await resp.text(errors="replace")
+        except (ClientError, TimeoutError):
+            return ""
+        text = " ".join(text.split())
+        if not text:
+            return ""
+        if len(text) > _MAX_ERROR_DETAIL:
+            text = f"{text[:_MAX_ERROR_DETAIL]}..."
+        return f": {text}"
 
     @staticmethod
     async def _decode_body(resp: ClientResponse, path: str) -> JSONValue:

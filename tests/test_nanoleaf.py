@@ -254,6 +254,38 @@ async def test_request_status_mapping_and_no_retry(
     assert _total_calls(mocked) == 1  # HTTP errors are never retried
 
 
+async def test_request_error_message_includes_device_body(
+    client: Nanoleaf, mocked: aioresponses
+) -> None:
+    mocked.put(api("state"), status=400, body='{"error":\n  "bad  value"}')
+    with pytest.raises(Unavailable) as excinfo:
+        await client._request("put", "state", {"on": {"value": True}})
+    assert str(excinfo.value) == (
+        'Device returned HTTP 400 for \'state\': {"error": "bad value"}'
+    )
+
+
+async def test_request_error_message_without_body_has_no_suffix(
+    client: Nanoleaf, mocked: aioresponses
+) -> None:
+    mocked.put(api("state"), status=400)
+    with pytest.raises(Unavailable) as excinfo:
+        await client._request("put", "state", {"on": {"value": True}})
+    assert str(excinfo.value) == "Device returned HTTP 400 for 'state'"
+
+
+async def test_request_error_body_is_truncated(
+    client: Nanoleaf, mocked: aioresponses
+) -> None:
+    mocked.get(api("state"), status=500, body="x" * 1000)
+    with pytest.raises(Unavailable) as excinfo:
+        await client._request("get", "state")
+    message = str(excinfo.value)
+    assert message.startswith("Device returned HTTP 500 for 'state': xxx")
+    assert message.endswith("x...")
+    assert len(message) < 260
+
+
 async def test_request_404_exposes_path_and_is_not_unavailable(
     client: Nanoleaf, mocked: aioresponses
 ) -> None:
