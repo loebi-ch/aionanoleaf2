@@ -39,12 +39,17 @@ setup(
         "Bug Tracker": "https://github.com/loebi-ch/aionanoleaf2/issues",
         "Source Code": "https://github.com/loebi-ch/aionanoleaf2",
         "Documentation": "https://github.com/loebi-ch/aionanoleaf2/blob/master/README.md",
+        "Changelog": "https://github.com/loebi-ch/aionanoleaf2/releases",
     },
     classifiers=[
         "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
+        "Programming Language :: Python :: 3.14",
+        "Programming Language :: Python :: 3 :: Only",
         "License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)",
         "Operating System :: OS Independent",
-        "Development Status :: 4 - Beta",
+        "Development Status :: 5 - Production/Stable",
         "Intended Audience :: Developers",
         "Natural Language :: English",
         "Topic :: Home Automation",
@@ -53,5 +58,7 @@ setup(
     python_requires=">=3.12",
     packages=["aionanoleaf2"],
     package_data={"aionanoleaf2": ["py.typed"]},
-    install_requires=["aiohttp"],
+    install_requires=[
+        "aiohttp>=3.9.0",
+    ],
 )
