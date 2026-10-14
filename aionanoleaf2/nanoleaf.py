@@ -836,7 +836,9 @@ class Nanoleaf:
 
         loop = asyncio.get_running_loop()
         transport, _ = await loop.create_datagram_endpoint(
-            lambda: _NanoleafTouchProtocol(self._raw_host, callback),
+            lambda: _NanoleafTouchProtocol(
+                self._raw_host, lambda event: self._invoke_callback(callback, event)
+            ),
             local_addr=(local_ip, local_port),
         )
         self._touch_transport = transport
@@ -1086,10 +1088,18 @@ class _NanoleafTouchProtocol(asyncio.DatagramProtocol):
     """AsyncIO DatagramProtocol handling binary UDP touch streaming packets."""
 
     def __init__(
-        self, raw_nanoleaf_host: str, callback: Callable[[TouchStreamEvent], Any]
+        self,
+        raw_nanoleaf_host: str,
+        dispatch: Callable[[TouchStreamEvent], None],
     ) -> None:
+        """Initialize the protocol.
+
+        ``dispatch`` receives every valid event. It must not block and must not
+        raise; ``Nanoleaf._invoke_callback`` fulfils both and also takes care of
+        async callbacks (task reference, error logging, cancellation).
+        """
         self._raw_nanoleaf_host = raw_nanoleaf_host
-        self._callback = callback
+        self._dispatch = dispatch
         self.transport: asyncio.BaseTransport | None = None
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
@@ -1123,4 +1133,4 @@ class _NanoleafTouchProtocol(asyncio.DatagramProtocol):
             strength=strength,
             panel_id_2=panel_id_2,
         )
-        asyncio.create_task(self._callback(event))
+        self._dispatch(event)
