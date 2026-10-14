@@ -224,6 +224,7 @@ async def check_brightness(
             )
     except NanoleafError as err:
         res.error(f"Helligkeit setzen fehlgeschlagen: {type(err).__name__}: {err}")
+        await report_state_after_error(light, out)
     finally:
         if mutated:
             out.step("Helligkeit zurücksetzen")
@@ -387,6 +388,66 @@ async def check_cancel(
     )
 
 
+async def report_state_after_error(light: Nanoleaf, out: Console) -> None:
+    """Nach einem Befehlsfehler zeigen, ob das Gerät den Befehl trotzdem ausgeführt hat."""
+    try:
+        await asyncio.sleep(0.5)
+        await light.get_info()
+    except NanoleafError as err:
+        out.info(f"Zustand nach dem Fehler nicht lesbar: {type(err).__name__}: {err}")
+        return
+    out.info(
+        f"Zustand nach dem Fehler: an={light.is_on}, Helligkeit={light.brightness}"
+    )
+
+
+async def ensure_powered_on(
+    light: Nanoleaf, recorder: EventRecorder, res: Result, timeout: float
+) -> bool:
+    """Gerät einschalten, falls es aus ist; True, wenn wir es eingeschaltet haben.
+
+    Ein ausgeschaltetes Gerät kann Helligkeitsänderungen mit HTTP 400 ablehnen
+    (beobachtet auf einem NL52 mit Firmware 12.3.2).
+    """
+    if light.is_on:
+        return False
+    res.out.step("Gerät ist aus: einschalten")
+    waiter = recorder.expect_state("is_on", True)
+    await light.turn_on()
+    if await wait_for(waiter, timeout):
+        res.out.ok("StateEvent is_on=True im Callback empfangen")
+    else:
+        res.out.warn(f"Kein StateEvent is_on=True innerhalb {timeout:g}s")
+    await asyncio.sleep(0.5)
+    await light.get_info()  # Helligkeit des eingeschalteten Geräts lesen
+    return True
+
+
+async def restore_power(
+    light: Nanoleaf, res: Result, brightness: int, timeout: float
+) -> None:
+    """Gerät wieder ausschalten, nachdem wir es eingeschaltet haben."""
+    res.out.step("Gerät wieder ausschalten")
+    try:
+        if light.brightness != brightness:
+            await light.set_brightness(brightness)
+            await asyncio.sleep(0.5)
+        await light.turn_off()
+        await asyncio.sleep(0.5)
+        await light.get_info()
+    except NanoleafError as err:
+        res.error(
+            f"Ausschalten fehlgeschlagen ({type(err).__name__}: {err}) "
+            "- bitte Gerät manuell ausschalten"
+        )
+        return
+    res.check(
+        not light.is_on,
+        "Gerät ist wieder aus",
+        "Gerät meldet weiterhin 'an' - bitte manuell ausschalten",
+    )
+
+
 async def check_device(
     light: Nanoleaf, out: Console, *, delta: int, timeout: float
 ) -> Result:
@@ -432,9 +493,19 @@ async def check_device(
             return res
         out.ok("Listener läuft")
 
-        await check_brightness(light, recorder, task, res, delta, timeout)
-        if light.model == "NL69" and not task.done():
-            await check_emersion(light, recorder, res, timeout)
+        before_brightness = light.brightness
+        powered_on_by_us = False
+        try:
+            powered_on_by_us = await ensure_powered_on(light, recorder, res, timeout)
+            await check_brightness(light, recorder, task, res, delta, timeout)
+            if light.model == "NL69" and not task.done():
+                await check_emersion(light, recorder, res, timeout)
+        except NanoleafError as err:
+            res.error(f"Befehl fehlgeschlagen: {type(err).__name__}: {err}")
+            await report_state_after_error(light, out)
+        finally:
+            if powered_on_by_us:
+                await restore_power(light, res, before_brightness, timeout)
 
         if task.done():
             res.error(describe_listener_failure(task))

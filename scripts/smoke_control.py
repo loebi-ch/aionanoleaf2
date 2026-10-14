@@ -33,9 +33,15 @@ if (_ROOT / "aionanoleaf2").is_dir():
 from aiohttp import ClientSession
 
 import aionanoleaf2
-from aionanoleaf2 import InvalidEffect, Nanoleaf, NanoleafError
+from aionanoleaf2 import (
+    InvalidEffect,
+    Nanoleaf,
+    NanoleafError,
+    Unavailable,
+)
 
 SETTLE_SECONDS = 0.5  # Read-after-write-Latenz der Firmware
+LATE_READ_SECONDS = 3.0  # zweiter Lesevorgang, wenn der Zustand zunächst abweicht
 RESERVED_EFFECTS = ("*Solid*", "*Static*", "*Dynamic*", "*Emersion*")
 
 
@@ -241,7 +247,16 @@ async def check_effects(light: Nanoleaf, res: Result) -> None:
 
 async def check_identify(light: Nanoleaf, res: Result) -> None:
     res.out.step("Identify (Panels blinken kurz)")
-    await light.identify()
+    try:
+        await light.identify()
+    except Unavailable as err:
+        if "HTTP 400" not in str(err):
+            raise
+        # Bekannt: Essentials (NL72K1) beantworten PUT /identify mit HTTP 400
+        res.out.warn(
+            f"Gerät unterstützt identify() nicht (HTTP 400, Modell {light.model})"
+        )
+        return
     res.out.ok("identify() ohne Fehler")
 
 
@@ -269,6 +284,9 @@ async def restore(light: Nanoleaf, snap: Snapshot, res: Result) -> None:
             await light.set_saturation(snap.saturation)
         await light.set_brightness(snap.brightness)
         if not snap.is_on:
+            # Der Essentials ignoriert turn_off(), wenn es unmittelbar auf set_effect()
+            # folgt (siehe probe_turn_off.py): kurz warten.
+            await asyncio.sleep(SETTLE_SECONDS)
             await light.turn_off()
         await refresh(light)
     except NanoleafError as err:
@@ -277,12 +295,34 @@ async def restore(light: Nanoleaf, snap: Snapshot, res: Result) -> None:
             "- bitte Zustand am Gerät prüfen"
         )
         return
+
+    def restored() -> bool:
+        return light.is_on == snap.is_on and close(light.brightness, snap.brightness, 1)
+
+    if not restored():
+        # Diagnose: braucht das Gerät nur länger, oder hat es den Befehl ignoriert?
+        out.info(
+            f"Zustand weicht ab (an={light.is_on}, Helligkeit={light.brightness}), "
+            f"lese nach {LATE_READ_SECONDS:g}s erneut"
+        )
+        await asyncio.sleep(LATE_READ_SECONDS)
+        try:
+            await light.get_info()
+        except NanoleafError as err:
+            res.error(f"get_info() fehlgeschlagen: {type(err).__name__}: {err}")
+            return
+        if restored():
+            out.warn(
+                f"Zustand stimmt erst nach {LATE_READ_SECONDS:g}s "
+                f"(Gerät reagiert verzögert)"
+            )
     res.check(
-        light.is_on == snap.is_on and close(light.brightness, snap.brightness, 1),
+        restored(),
         f"Zustand wiederhergestellt (an={snap.is_on}, Helligkeit={snap.brightness}, "
         f"Modus={snap.color_mode}, Effekt={snap.effect!r})",
         f"Zustand weicht ab: an={light.is_on} (vorher {snap.is_on}), "
-        f"Helligkeit={light.brightness} (vorher {snap.brightness})",
+        f"Helligkeit={light.brightness} (vorher {snap.brightness}) "
+        "- bitte Gerät prüfen",
     )
 
 
@@ -302,15 +342,17 @@ async def check_device(light: Nanoleaf, out: Console, *, identify: bool) -> Resu
         f"Modus={snap.color_mode}, Effekt={snap.effect!r}"
     )
 
+    checks = [check_power_and_brightness, check_color, check_effects]
+    if identify:
+        checks.append(check_identify)
+    checks.append(check_power_off)
     try:
-        await check_power_and_brightness(light, res)
-        await check_color(light, res)
-        await check_effects(light, res)
-        if identify:
-            await check_identify(light, res)
-        await check_power_off(light, res)
-    except NanoleafError as err:
-        res.error(f"Befehl fehlgeschlagen: {type(err).__name__}: {err}")
+        for check in checks:
+            # Ein fehlgeschlagener Befehl bricht die übrigen Prüfungen nicht ab
+            try:
+                await check(light, res)
+            except NanoleafError as err:
+                res.error(f"Befehl fehlgeschlagen: {type(err).__name__}: {err}")
     finally:
         await restore(light, snap, res)
     return res
