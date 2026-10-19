@@ -631,6 +631,94 @@ async def test_quick_eof_without_events_keeps_backing_off(
     assert attempts == [0, 1]  # no hot reconnect loop
 
 
+def _stream_records(
+    caplog: pytest.LogCaptureFixture, level: int
+) -> list[logging.LogRecord]:
+    """Return the records of one level that report the event stream state."""
+    return [
+        r
+        for r in caplog.records
+        if r.levelno == level and "unavailable" in r.getMessage()
+    ]
+
+
+async def test_outage_is_logged_once_and_recovery_is_reported(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    session = FakeSession(
+        ClientConnectionError("down"),
+        TimeoutError(),
+        ClientConnectionError("down"),
+        FakeResponse(200, sse(1, state_event(2, 4))),  # event, then EOF
+        ClientConnectionError("down again"),
+        FakeResponse(200, [HANG]),
+    )
+    client = make_client(session)
+
+    with caplog.at_level(logging.DEBUG, logger="aionanoleaf2.nanoleaf"):
+        task = asyncio.create_task(client.listen_events(state_callback=lambda e: None))
+        await eventually(lambda: len(session.calls) == 6)
+        await stop(task)
+
+    warnings = _stream_records(caplog, logging.WARNING)
+    # First failure of each outage warns; the repeats within it are only DEBUG.
+    assert [("ClientConnectionError: down" in w.getMessage()) for w in warnings] == [
+        True,
+        True,
+    ]
+    assert "down again" in warnings[1].getMessage()
+    assert len(_stream_records(caplog, logging.DEBUG)) == 2
+    restored = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert [r.getMessage() for r in restored] == [f"Event stream of {HOST} restored"]
+    assert all(TOKEN not in r.getMessage() for r in caplog.records)
+
+
+async def test_repeated_http_errors_are_logged_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    session = FakeSession(
+        FakeResponse(500),
+        FakeResponse(500),
+        FakeResponse(503),
+        FakeResponse(200, [HANG]),
+    )
+    client = make_client(session)
+
+    with caplog.at_level(logging.DEBUG, logger="aionanoleaf2.nanoleaf"):
+        task = asyncio.create_task(client.listen_events())
+        await eventually(lambda: len(session.calls) == 4)
+        await stop(task)
+
+    warnings = _stream_records(caplog, logging.WARNING)
+    assert len(warnings) == 1
+    assert "HTTP 500" in warnings[0].getMessage()
+    assert len(_stream_records(caplog, logging.DEBUG)) == 2
+    # A connection that opens but never delivers an event is not "restored" yet.
+    assert not [r for r in caplog.records if r.levelno == logging.INFO]
+
+
+async def test_stable_connection_reports_recovery_without_events(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(nanoleaf_module, "_SSE_STABLE_AFTER", 0.02)
+    session = FakeSession(
+        ClientConnectionError("down"),
+        FakeResponse(200, [0.05]),  # idle longer than the stability window, then EOF
+        FakeResponse(200, [HANG]),
+    )
+    client = make_client(session)
+
+    with caplog.at_level(logging.INFO, logger="aionanoleaf2.nanoleaf"):
+        task = asyncio.create_task(client.listen_events())
+        await eventually(lambda: len(session.calls) == 3)
+        await stop(task)
+
+    assert len(_stream_records(caplog, logging.WARNING)) == 1
+    assert [r.getMessage() for r in caplog.records if r.levelno == logging.INFO] == [
+        f"Event stream of {HOST} restored"
+    ]
+
+
 async def test_cancel_closes_response_and_propagates() -> None:
     session = FakeSession(FakeResponse(200, [HANG]))
     client = make_client(session)

@@ -129,13 +129,27 @@ def _backoff_delay(attempt: int) -> float:
 
 
 class _Backoff:
-    """Attempt counter for the SSE reconnect delay."""
+    """Attempt counter for the SSE reconnect delay.
+
+    Also remembers whether the stream is currently degraded, so that an outage
+    is logged once at WARNING (and once more when it is over) instead of on
+    every reconnect attempt.
+    """
 
     def __init__(self) -> None:
         self._attempt = 0
+        self._degraded = False
 
-    def reset(self) -> None:
+    def reset(self) -> bool:
+        """Mark the stream healthy; return True if it was degraded before."""
         self._attempt = 0
+        recovered, self._degraded = self._degraded, False
+        return recovered
+
+    def mark_degraded(self) -> bool:
+        """Mark the stream degraded; return True for the first failure of an outage."""
+        first, self._degraded = not self._degraded, True
+        return first
 
     def next_delay(self) -> float:
         delay = _backoff_delay(self._attempt)
@@ -941,30 +955,40 @@ class Nanoleaf:
                                 "Event stream of %s closed by device", self._host
                             )
                         else:
-                            _LOGGER.warning(
-                                "Event stream of %s returned HTTP %s",
-                                self._host,
-                                resp.status,
+                            self._log_stream_problem(
+                                backoff, "HTTP %s", int(resp.status)
                             )
                 except (ClientError, TimeoutError) as err:
-                    _LOGGER.debug(
-                        "Event stream of %s failed (%s: %s)",
-                        self._host,
-                        type(err).__name__,
-                        err,
-                    )
+                    self._log_stream_problem(backoff, "%s: %s", type(err).__name__, err)
 
                 # A long-lived connection is healthy even when no event arrived.
                 if (
                     connected_at is not None
                     and loop.time() - connected_at >= _SSE_STABLE_AFTER
                 ):
-                    backoff.reset()
+                    self._log_stream_recovered(backoff)
                 await asyncio.sleep(backoff.next_delay())
         except asyncio.CancelledError:
             # The response is already closed by 'async with'; stop pending callbacks.
             await self._cancel_background_tasks()
             raise
+
+    def _log_stream_problem(
+        self, backoff: _Backoff, reason: str, *args: object
+    ) -> None:
+        """Log a stream failure: WARNING for the first of an outage, then DEBUG."""
+        level = logging.WARNING if backoff.mark_degraded() else logging.DEBUG
+        _LOGGER.log(
+            level,
+            "Event stream of %s unavailable (" + reason + "), retrying",
+            self._host,
+            *args,
+        )
+
+    def _log_stream_recovered(self, backoff: _Backoff) -> None:
+        """Reset the backoff and report the end of an outage once."""
+        if backoff.reset():
+            _LOGGER.info("Event stream of %s restored", self._host)
 
     async def _read_sse_stream(
         self,
@@ -1008,7 +1032,7 @@ class Nanoleaf:
             elif field == "data" and event_type_id is not None:
                 type_id, event_type_id = event_type_id, None
                 if await self._process_sse_data(type_id, value, callbacks):
-                    backoff.reset()
+                    self._log_stream_recovered(backoff)
 
     async def _process_sse_data(
         self,
